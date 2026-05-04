@@ -133,7 +133,6 @@ class WriterRoomApp(tk.Tk):
 
         # TTS state
         self.voice_wav: Optional[Path] = None
-        self.output_dir: Path = Path("audio")
 
         _WRITERROOM_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -159,6 +158,13 @@ class WriterRoomApp(tk.Tk):
         self.bind("<Control-n>", lambda _e: self._new_project())
         self.bind("<Control-o>", lambda _e: self._open_project())
         self.bind("<Control-s>", lambda _e: self._save_project())
+
+    @property
+    def _audio_dir(self) -> Path:
+        """Audio složka vždy vedle souboru projektu (nebo v ~/.writerroom/audio)."""
+        if self.project_path:
+            return self.project_path.parent / "audio"
+        return _WRITERROOM_DIR / "audio"
 
     # ── Sestavení UI ──────────────────────────────────────────────────────────
 
@@ -234,6 +240,7 @@ class WriterRoomApp(tk.Tk):
         self._build_tab_chapter(nb)
         self._build_tab_tts(nb)
         self._build_tab_import(nb)
+        self._restore_tts_config()
 
     # ── Záložka: Kostra ───────────────────────────────────────────────────────
 
@@ -315,91 +322,95 @@ class WriterRoomApp(tk.Tk):
         voice_frm = tk.LabelFrame(f, text="Nastavení hlasu (XTTS-v2)",
                                    bg=BG, fg=FG, font=("Segoe UI", 10),
                                    padx=10, pady=8)
-        voice_frm.pack(fill=tk.X, padx=12, pady=12)
+        voice_frm.pack(fill=tk.X, padx=12, pady=(12, 6))
 
-        # Jazyk
         row0 = tk.Frame(voice_frm, bg=BG)
         row0.pack(fill=tk.X, pady=2)
-        tk.Label(row0, text="Jazyk:", width=14, anchor=tk.W,
+        tk.Label(row0, text="Jazyk:", width=18, anchor=tk.W,
                  bg=BG, fg=FG, font=("Segoe UI", 10)).pack(side=tk.LEFT)
         self._lang_var = tk.StringVar(value="cs")
         lang_cb = ttk.Combobox(row0, textvariable=self._lang_var, width=8, state="readonly")
         lang_cb["values"] = ["cs", "en", "de", "fr", "es", "pl", "sk", "it", "pt", "ru"]
         lang_cb.pack(side=tk.LEFT)
 
-        # Vestavěný mluvčí
         row1 = tk.Frame(voice_frm, bg=BG)
         row1.pack(fill=tk.X, pady=2)
-        tk.Label(row1, text="Vestavěný mluvčí:", width=14, anchor=tk.W,
+        tk.Label(row1, text="Vestavěný mluvčí:", width=18, anchor=tk.W,
                  bg=BG, fg=FG, font=("Segoe UI", 10)).pack(side=tk.LEFT)
         self._speaker_var = tk.StringVar(value="Ana Florence")
         spk_cb = ttk.Combobox(row1, textvariable=self._speaker_var,
                                values=BUILTIN_SPEAKERS, width=22, state="readonly")
         spk_cb.pack(side=tk.LEFT)
-        tk.Label(row1, text="(použije se, pokud nevyberete vlastní WAV)",
+        tk.Label(row1, text="(pokud nevyberete vlastní WAV hlas)",
                  bg=BG, fg=FG_DIM, font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=8)
 
-        # Vlastní hlas
         row2 = tk.Frame(voice_frm, bg=BG)
         row2.pack(fill=tk.X, pady=2)
-        tk.Label(row2, text="Vlastní hlas (WAV):", width=14, anchor=tk.W,
+        tk.Label(row2, text="Vlastní hlas (WAV):", width=18, anchor=tk.W,
                  bg=BG, fg=FG, font=("Segoe UI", 10)).pack(side=tk.LEFT)
         self._voice_lbl_var = tk.StringVar(value="— žádný —")
         tk.Label(row2, textvariable=self._voice_lbl_var, bg=BG, fg=ACCENT,
                  font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=4)
-        self._mkbtn(row2, "📂 Vybrat WAV…", self._pick_voice).pack(side=tk.LEFT, padx=4)
-        self._mkbtn(row2, "✕ Smazat", self._clear_voice).pack(side=tk.LEFT)
-        tk.Label(voice_frm, text="Vzorový hlas: WAV soubor ~6 s (klonování hlasu).",
-                 bg=BG, fg=FG_DIM, font=("Segoe UI", 9)).pack(anchor=tk.W)
+        self._mkbtn(row2, "📂 Vybrat…", self._pick_voice).pack(side=tk.LEFT, padx=4)
+        self._mkbtn(row2, "✕", self._clear_voice).pack(side=tk.LEFT)
 
-        # Cíl a výstup
-        mid = tk.Frame(f, bg=BG)
-        mid.pack(fill=tk.X, padx=12, pady=4)
-
-        tk.Label(mid, text="Generovat:", bg=BG, fg=FG,
-                 font=("Segoe UI", 10)).pack(side=tk.LEFT)
-        self._tts_target = tk.StringVar(value="aktuální kapitolu")
-        ttk.Combobox(mid, textvariable=self._tts_target, state="readonly", width=22,
-                     values=["aktuální kapitolu", "celou knihu"]).pack(side=tk.LEFT, padx=8)
-
-        tk.Label(mid, text="Výstupní složka:", bg=BG, fg=FG,
-                 font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=(20, 4))
-        self._outdir_var = tk.StringVar(value="audio")
-        tk.Label(mid, textvariable=self._outdir_var, bg=BG, fg=ACCENT,
-                 font=("Segoe UI", 9)).pack(side=tk.LEFT)
-        self._mkbtn(mid, "📂", self._pick_outdir).pack(side=tk.LEFT, padx=4)
-
-        # Tlačítko generovat
-        gen_row = tk.Frame(f, bg=BG)
-        gen_row.pack(fill=tk.X, padx=12, pady=(8, 4))
-        self._btn_tts = self._mkbtn(
-            gen_row, "▶  Generovat audio (XTTS-v2)",
-            self._generate_audio, bg=ACCENT, fg="white")
-        self._btn_tts.pack(side=tk.LEFT)
+        # Tlačítka akcí
+        btn_row = tk.Frame(f, bg=BG)
+        btn_row.pack(fill=tk.X, padx=12, pady=(4, 2))
+        self._btn_tts_one = self._mkbtn(
+            btn_row, "▶  Generovat vybranou",
+            self._generate_selected, bg=ACCENT, fg="white")
+        self._btn_tts_one.pack(side=tk.LEFT, padx=(0, 8))
+        self._btn_tts_all = self._mkbtn(
+            btn_row, "▶▶  Generovat vše",
+            self._generate_all, bg=BTN, fg=FG)
+        self._btn_tts_all.pack(side=tk.LEFT, padx=(0, 8))
+        self._btn_play_tts = self._mkbtn(
+            btn_row, "🔊 Přehrát", self._play_selected_tts, bg=BTN, fg=FG)
+        self._btn_play_tts.pack(side=tk.LEFT)
 
         # Progress
         self._tts_msg = tk.StringVar(value="")
         tk.Label(f, textvariable=self._tts_msg, bg=BG, fg=FG,
                  font=("Segoe UI", 9), wraplength=700,
-                 justify=tk.LEFT).pack(anchor=tk.W, padx=12)
+                 justify=tk.LEFT).pack(anchor=tk.W, padx=12, pady=(4, 0))
         self._tts_pb = ttk.Progressbar(f, mode="indeterminate")
-        self._tts_pb.pack(fill=tk.X, padx=12, pady=4)
+        self._tts_pb.pack(fill=tk.X, padx=12, pady=(2, 6))
 
-        # Seznam vygenerovaných souborů
-        tk.Label(f, text="Vygenerované soubory:", bg=BG, fg=FG,
-                 font=("Segoe UI", 10)).pack(anchor=tk.W, padx=12, pady=(6, 2))
-        audio_frm = tk.Frame(f, bg=BG)
-        audio_frm.pack(fill=tk.BOTH, expand=True, padx=12)
-        self._audio_list = tk.Listbox(audio_frm, bg=ENTRY, fg=FG,
-                                       selectbackground=ACCENT, relief=tk.FLAT,
-                                       font=("Segoe UI", 10))
-        asc = tk.Scrollbar(audio_frm, command=self._audio_list.yview, bg=PANEL)
-        self._audio_list.configure(yscrollcommand=asc.set)
-        asc.pack(side=tk.RIGHT, fill=tk.Y)
-        self._audio_list.pack(fill=tk.BOTH, expand=True)
+        # Treeview kapitol s audio statusem
+        tree_frm = tk.Frame(f, bg=BG)
+        tree_frm.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
 
-        self._mkbtn(f, "▶ Přehrát vybraný soubor",
-                    self._play_audio).pack(anchor=tk.W, padx=12, pady=6)
+        cols = ("nr", "title", "status")
+        style = ttk.Style()
+        style.configure("Audio.Treeview", background=ENTRY, foreground=FG,
+                         fieldbackground=ENTRY, rowheight=28,
+                         font=("Segoe UI", 10))
+        style.configure("Audio.Treeview.Heading", background=PANEL,
+                         foreground=FG, font=("Segoe UI", 10, "bold"))
+        style.map("Audio.Treeview", background=[("selected", ACCENT)],
+                  foreground=[("selected", "white")])
+
+        self._tts_tree = ttk.Treeview(tree_frm, columns=cols,
+                                       show="headings", style="Audio.Treeview",
+                                       selectmode="browse")
+        self._tts_tree.heading("nr",     text="#",        anchor=tk.CENTER)
+        self._tts_tree.heading("title",  text="Kapitola", anchor=tk.W)
+        self._tts_tree.heading("status", text="Audio",    anchor=tk.CENTER)
+        self._tts_tree.column("nr",     width=40,  stretch=False, anchor=tk.CENTER)
+        self._tts_tree.column("title",  width=500, stretch=True,  anchor=tk.W)
+        self._tts_tree.column("status", width=120, stretch=False, anchor=tk.CENTER)
+
+        vsb = ttk.Scrollbar(tree_frm, orient="vertical",
+                             command=self._tts_tree.yview)
+        self._tts_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._tts_tree.pack(fill=tk.BOTH, expand=True)
+        self._tts_tree.bind("<Double-1>", lambda _e: self._play_selected_tts())
+
+        # Barevné tagy pro status
+        self._tts_tree.tag_configure("done",    foreground=GREEN)
+        self._tts_tree.tag_configure("missing", foreground=FG_DIM)
 
     # ── Záložka: Import textu ─────────────────────────────────────────────────
 
@@ -600,6 +611,7 @@ class WriterRoomApp(tk.Tk):
             if self.project.chapters:
                 self._ch_list.selection_set(0)
                 self._on_ch_select(None)
+            self._refresh_audio_status()
         except Exception as exc:
             messagebox.showerror("Chyba", f"Nelze otevřít projekt:\n{exc}")
 
@@ -821,49 +833,68 @@ class WriterRoomApp(tk.Tk):
         if path:
             self.voice_wav = Path(path)
             self._voice_lbl_var.set(Path(path).name)
+            self._save_tts_config()
 
     def _clear_voice(self) -> None:
         self.voice_wav = None
         self._voice_lbl_var.set("— žádný —")
+        self._save_tts_config()
 
-    def _pick_outdir(self) -> None:
-        d = filedialog.askdirectory(title="Výstupní složka pro audio")
-        if d:
-            self.output_dir = Path(d)
-            self._outdir_var.set(str(self.output_dir))
+    def _save_tts_config(self) -> None:
+        cfg = self._load_config()
+        cfg["tts_speaker"] = self._speaker_var.get()
+        cfg["tts_lang"]    = self._lang_var.get()
+        cfg["tts_voice"]   = str(self.voice_wav) if self.voice_wav else ""
+        self._save_config(cfg)
 
-    def _generate_audio(self) -> None:
+    def _restore_tts_config(self) -> None:
+        cfg = self._load_config()
+        if cfg.get("tts_speaker"):
+            self._speaker_var.set(cfg["tts_speaker"])
+        if cfg.get("tts_lang"):
+            self._lang_var.set(cfg["tts_lang"])
+        wav = cfg.get("tts_voice", "")
+        if wav and Path(wav).exists():
+            self.voice_wav = Path(wav)
+            self._voice_lbl_var.set(Path(wav).name)
+
+    def _generate_selected(self) -> None:
+        """Generuje audio pro právě vybranou kapitolu v Treeview."""
+        sel = self._tts_tree.selection()
+        if not sel or not self.project:
+            messagebox.showinfo("Upozornění", "Nejprve vyber kapitolu v seznamu.", parent=self)
+            return
+        idx = int(self._tts_tree.item(sel[0], "values")[0]) - 1
+        ch = self.project.chapters[idx]
+        if not ch.text.strip():
+            messagebox.showinfo("Upozornění",
+                                "Vybraná kapitola nemá text.\nNejprve ji napiš nebo vygeneruj.",
+                                parent=self)
+            return
+        self._run_tts([ch])
+
+    def _generate_all(self) -> None:
+        """Generuje audio pro všechny kapitoly s textem."""
         if not self.project:
             return
-        self._sync_to_model()
+        chapters_todo = [ch for ch in self.project.chapters if ch.text.strip()]
+        if not chapters_todo:
+            messagebox.showinfo("Upozornění", "Žádná kapitola neobsahuje text.", parent=self)
+            return
+        self._run_tts(chapters_todo)
 
-        target = self._tts_target.get()
-        if target == "aktuální kapitolu":
-            if self.current_idx is None:
-                messagebox.showinfo("Upozornění", "Nejprve vyber kapitolu.", parent=self)
-                return
-            ch_obj = self.project.chapters[self.current_idx]
-            if not ch_obj.text.strip():
-                messagebox.showinfo("Upozornění",
-                                    "Vybraná kapitola nemá žádný text.\n"
-                                    "Nejprve ji vygeneruj nebo napiš.", parent=self)
-                return
-            chapters_todo = [ch_obj]
-        else:
-            chapters_todo = [ch for ch in self.project.chapters if ch.text.strip()]
-            if not chapters_todo:
-                messagebox.showinfo("Upozornění",
-                                    "Žádná kapitola neobsahuje text.", parent=self)
-                return
+    def _run_tts(self, chapters_todo: list) -> None:
+        audio_dir = self._audio_dir
+        audio_dir.mkdir(parents=True, exist_ok=True)
 
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self._btn_tts.config(state=tk.DISABLED, text="Generuji audio…")
+        self._btn_tts_one.config(state=tk.DISABLED)
+        self._btn_tts_all.config(state=tk.DISABLED)
         self._tts_pb.start()
+        self._save_tts_config()
 
-        voice_wav   = self.voice_wav
-        speaker     = self._speaker_var.get()
-        language    = self._lang_var.get()
-        output_dir  = self.output_dir
+        voice_wav = self.voice_wav
+        speaker   = self._speaker_var.get()
+        language  = self._lang_var.get()
 
         def progress(msg: str) -> None:
             self.after(0, lambda m=msg: self._tts_msg.set(m))
@@ -872,11 +903,11 @@ class WriterRoomApp(tk.Tk):
         def run() -> None:
             try:
                 engine = get_engine()
-                out_files: list[Path] = []
+                count = 0
                 for ch in chapters_todo:
                     safe = "".join(c if c.isalnum() or c in " -_" else "_"
                                    for c in ch.title).strip()
-                    out_path = output_dir / f"{safe}.wav"
+                    out_path = audio_dir / f"{safe}.wav"
                     engine.synthesize(
                         text=ch.text,
                         output_path=out_path,
@@ -886,46 +917,53 @@ class WriterRoomApp(tk.Tk):
                         progress_callback=progress,
                     )
                     ch.audio_path = str(out_path)
-                    out_files.append(out_path)
+                    count += 1
+                    self.after(0, self._refresh_audio_status)
 
                 def done() -> None:
-                    self._btn_tts.config(state=tk.NORMAL,
-                                          text="▶  Generovat audio (XTTS-v2)")
+                    self._btn_tts_one.config(state=tk.NORMAL)
+                    self._btn_tts_all.config(state=tk.NORMAL)
                     self._tts_pb.stop()
-                    self._refresh_audio_list()
-                    self._set_status(
-                        f"Audio hotovo: {len(out_files)} soubor(ů) → {output_dir}")
+                    self._tts_msg.set(f"Hotovo – vygenerováno {count} kapitol.")
+                    self._set_status(f"Audio hotovo: {count} kapitol → {audio_dir}")
+                    self._autosave()
 
                 self.after(0, done)
             except Exception as exc:
                 err = str(exc)
                 self.after(0, lambda: messagebox.showerror("Chyba TTS", err))
-                self.after(0, lambda: self._btn_tts.config(
-                    state=tk.NORMAL, text="▶  Generovat audio (XTTS-v2)"))
+                self.after(0, lambda: self._btn_tts_one.config(state=tk.NORMAL))
+                self.after(0, lambda: self._btn_tts_all.config(state=tk.NORMAL))
                 self.after(0, self._tts_pb.stop)
-                self.after(0, lambda: self._set_status("Chyba TTS generování"))
+                self.after(0, lambda: self._set_status("Chyba TTS"))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _refresh_audio_list(self) -> None:
-        self._audio_list.delete(0, tk.END)
-        if not self.output_dir.exists():
+    def _refresh_audio_status(self) -> None:
+        """Aktualizuje Treeview – zobrazí kapitoly a jejich audio stav."""
+        self._tts_tree.delete(*self._tts_tree.get_children())
+        if not self.project:
             return
-        for f in sorted(self.output_dir.glob("*.wav")):
-            self._audio_list.insert(tk.END, f.name)
+        for i, ch in enumerate(self.project.chapters, start=1):
+            exists = ch.audio_path and Path(ch.audio_path).exists()
+            status = "✓  hotovo" if exists else "○  chybí"
+            tag    = "done" if exists else "missing"
+            self._tts_tree.insert("", tk.END, iid=str(i),
+                                   values=(i, ch.title, status), tags=(tag,))
 
-    def _play_audio(self) -> None:
-        sel = self._audio_list.curselection()
-        if not sel:
+    def _play_selected_tts(self) -> None:
+        sel = self._tts_tree.selection()
+        if not sel or not self.project:
             return
-        name = self._audio_list.get(sel[0])
-        path = self.output_dir / name
-        if not path.exists():
-            messagebox.showerror("Chyba", f"Soubor nenalezen:\n{path}")
+        idx = int(self._tts_tree.item(sel[0], "values")[0]) - 1
+        ch = self.project.chapters[idx]
+        if not ch.audio_path or not Path(ch.audio_path).exists():
+            messagebox.showinfo("Upozornění",
+                                "Tato kapitola nemá vygenerované audio.", parent=self)
             return
         try:
-            os.startfile(str(path))
-            self._set_status(f"Přehrávám: {name}")
+            os.startfile(str(ch.audio_path))
+            self._set_status(f"Přehrávám: {Path(ch.audio_path).name}")
         except Exception as exc:
             messagebox.showerror("Chyba přehrávání", str(exc))
 
@@ -982,6 +1020,7 @@ class WriterRoomApp(tk.Tk):
                 if self.project.chapters:
                     self._ch_list.selection_set(0)
                     self._on_ch_select(None)
+                self._refresh_audio_status()
                 self._set_status(f"Obnoven projekt: {Path(last).name}")
                 return
             except Exception:
