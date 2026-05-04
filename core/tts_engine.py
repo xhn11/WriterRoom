@@ -5,7 +5,10 @@ Dlouhé texty se automaticky rozdělí na chunky a výsledné WAV soubory se spo
 """
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 import threading
 import wave
 from pathlib import Path
@@ -81,10 +84,16 @@ class TTSEngine:
         self._lock = threading.Lock()
         self._loaded = False
 
+    @staticmethod
+    def _agree_tos() -> None:
+        """Nastaví env proměnnou pro automatické odsouhlasení Coqui CPML licence."""
+        os.environ.setdefault("COQUI_TOS_AGREED", "1")
+
     def _load(self, cb: Optional[Callable[[str], None]] = None) -> None:
         with self._lock:
             if self._loaded:
                 return
+            self._agree_tos()
             try:
                 if cb:
                     cb("Nahrávám XTTS-v2 model (první spuštění trvá 1–2 min)…")
@@ -96,11 +105,23 @@ class TTSEngine:
                 self._loaded = True
                 if cb:
                     cb(f"XTTS-v2 připraven ({device.upper()})")
-            except ImportError as exc:
-                raise RuntimeError(
-                    "Knihovna TTS není nainstalována.\n"
-                    "Spusť: pip install coqui-tts torch torchaudio"
-                ) from exc
+            except ImportError:
+                if cb:
+                    cb("TTS knihovna chybí – instaluji automaticky (může trvat pár minut)…")
+                pkgs = ["coqui-tts", "torch", "torchaudio", "transformers<4.46"]
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "--quiet"] + pkgs
+                )
+                if cb:
+                    cb("Instalace hotova – nahrávám XTTS-v2 model…")
+                from TTS.api import TTS  # type: ignore
+                import torch  # type: ignore
+
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                self._tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+                self._loaded = True
+                if cb:
+                    cb(f"XTTS-v2 připraven ({device.upper()})")
 
     def synthesize(
         self,
