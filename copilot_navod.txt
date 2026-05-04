@@ -1,0 +1,106 @@
+Copilot API – návod na implementaci
+=====================================
+
+ZÁVISLOSTI
+----------
+pip install httpx
+
+Žádný API klíč se nekupuje ani nenastavuje ručně.
+Vyžaduje aktivní GitHub Copilot předplatné na účtu.
+
+
+AUTENTIZACE (copilot_auth.py)
+------------------------------
+Modul sám hledá GitHub OAuth token v tomto pořadí:
+
+  1. Proměnná prostředí GITHUB_OAUTH_TOKEN nebo GITHUB_TOKEN
+  2. Windows Credential Manager (uloženo automaticky po `gh auth login` nebo `git clone`)
+  3. GitHub CLI: příkaz `gh auth token`
+
+Nejjednodušší setup:
+  > gh auth login
+  (stačí jednou, token se uloží do Credential Manageru)
+
+Alternativně v .env:
+  GITHUB_OAUTH_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxx
+
+OAuth token se interně vymění za krátkodobý Copilot session token (~30 min),
+který se automaticky obnovuje – není potřeba nic dalšího řešit.
+
+
+POUŽITÍ (copilot_api.py)
+------------------------
+from copilot_api import ask, ask_json, is_available
+
+# Zkontroluj dostupnost (vrací False pokud není nalezen OAuth token)
+if not is_available():
+    print("Copilot nedostupný – spusť: gh auth login")
+else:
+    # Jednoduchý dotaz – vrací string
+    odpoved = ask("Napiš krátký příběh o drakovi.")
+
+    # Dotaz se systémovým promptem
+    odpoved = ask(
+        "Pokračuj v příběhu...",
+        system="Jsi kreativní spisovatel. Piš dramaticky a poeticky.",
+    )
+
+    # Dotaz vracející JSON (automaticky parsovaný)
+    data = ask_json(
+        "Vrať JSON objekt s klíči 'titul', 'zanr', 'postavy' pro fantasy příběh."
+    )
+    print(data["titul"])
+
+
+PARAMETRY FUNKCE ask()
+-----------------------
+ask(
+    user_message,           # povinný – text dotazu
+    system="",              # systémový prompt (kontext pro AI)
+    model="gpt-4o",         # model: "gpt-4o", "gpt-4o-mini", "claude-3.5-sonnet" ...
+    temperature=0.0,        # 0.0 = deterministický, 1.0 = kreativní/náhodný
+    max_tokens=2000,        # maximální délka odpovědi
+    timeout=90.0,           # timeout v sekundách
+)
+
+Pro kreativní psaní doporučeno: temperature=0.7–1.0
+
+
+VÝJIMKY
+-------
+RuntimeError      – OAuth token nebyl nalezen
+RateLimitError    – API rate limit (obsahuje .wait_seconds)
+TimeoutError      – vypršel timeout
+ValueError        – neočekávaná odpověď nebo nevalidní JSON (u ask_json)
+httpx.HTTPStatusError – HTTP chyba (4xx/5xx)
+
+Příklad ošetření:
+    from copilot_api import ask, RateLimitError
+    import time
+
+    try:
+        text = ask("Napiš scénu...")
+    except RateLimitError as e:
+        time.sleep(e.wait_seconds)
+        text = ask("Napiš scénu...")  # opakuj
+
+
+DOSTUPNÉ MODELY
+---------------
+Přes Copilot API (vyžadují Copilot předplatné):
+  - gpt-4o           (výchozí, nejlepší výkon)
+  - gpt-4o-mini      (rychlý, levnější kvóta)
+  - claude-3.5-sonnet
+  - o1-mini
+
+Pouze přes GitHub Models Marketplace (prefixem Meta-, Mistral-, AI21-):
+  - tyto modely Copilot API nepodporuje, copilot_auth.py je identifikuje
+
+
+STRUKTURA PROJEKTU
+------------------
+WriterRoom/
+  copilot_auth.py    – správce tokenů (nekopíruj, neupravuj)
+  copilot_api.py     – veřejné API (nekopíruj, neupravuj)
+  copilot_navod.txt  – tento soubor
+  main.py            – tvůj kód (importuj z copilot_api)

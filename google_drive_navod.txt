@@ -1,0 +1,124 @@
+Google Drive API – návod na implementaci pro WriterRoom
+=========================================================
+
+ZÁVISLOSTI
+----------
+pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+Nebo přes requirements.txt:
+  pip install -r requirements.txt
+
+
+NASTAVENÍ CREDENTIALS (jednou)
+-------------------------------
+1. Jdi na https://console.cloud.google.com/
+2. Vytvoř nový projekt (nebo použij existující)
+3. APIs & Services → Library → vyhledej "Google Drive API" → Enable
+4. APIs & Services → Credentials → + CREATE CREDENTIALS → OAuth 2.0 Client IDs
+5. Application type: Desktop app, pojmenuj libovolně
+6. Stáhni JSON → přejmenuj na credentials.json
+7. Vlož credentials.json do složky WriterRoom (nebo mimo repo a nastav cestu)
+
+OAuth Consent Screen (pokud to vyžaduje):
+  - OAuth consent screen → External → Create
+  - Vyplň jen povinná pole (App name, email)
+  - Scopes: https://www.googleapis.com/auth/drive.file
+    (drive.file = přístup jen k souborům vytvořeným touto appkou – bezpečnější než drive)
+  - Test users: přidej svůj Google účet
+
+!! BEZPEČNOST:
+  - credentials.json a token.json NESMÍ být v gitu
+  - přidej do .gitignore: credentials.json, token.json
+
+
+AUTENTIZACE
+-----------
+Při prvním spuštění se otevře prohlížeč pro udělení oprávnění.
+Token se automaticky uloží do token.json a při dalším spuštění se obnoví sám.
+
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+
+def get_drive_service(credentials_path="credentials.json", token_path="token.json"):
+    creds = None
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(token_path, "w", encoding="utf-8") as f:
+            f.write(creds.to_json())
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+POUŽITÍ – UPLOAD SOUBORU
+------------------------
+from googleapiclient.http import MediaFileUpload
+
+def upload_file(service, local_path: str, drive_folder_id: str = None) -> str:
+    """Nahraje soubor na Drive, vrátí file_id."""
+    name = os.path.basename(local_path)
+    metadata = {"name": name}
+    if drive_folder_id:
+        metadata["parents"] = [drive_folder_id]
+    media = MediaFileUpload(local_path, resumable=True)
+    result = service.files().create(body=metadata, media_body=media, fields="id").execute()
+    return result["id"]
+
+
+POUŽITÍ – DOWNLOAD SOUBORU
+--------------------------
+import io
+from googleapiclient.http import MediaIoBaseDownload
+
+def download_file(service, file_id: str, dest_path: str) -> None:
+    """Stáhne soubor z Drive podle file_id."""
+    request = service.files().get_media(fileId=file_id)
+    with open(dest_path, "wb") as f:
+        downloader = MediaIoBaseDownload(f, request)
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+
+POUŽITÍ – VÝPIS SOUBORŮ VE SLOŽCE
+-----------------------------------
+def list_files(service, folder_id: str) -> list:
+    """Vrátí seznam souborů v Drive složce (id, name)."""
+    results = service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false",
+        fields="files(id, name, mimeType, modifiedTime)",
+        pageSize=100,
+    ).execute()
+    return results.get("files", [])
+
+
+DOPORUČENÉ POUŽITÍ V WRITERROOM
+---------------------------------
+- Scope: drive.file – appka vidí jen soubory, které sama vytvoří (bezpečné)
+- Ukládat projekty jako JSON (project.json) nebo ZIP celé složky
+- folder_id Drive složky uložit do settings nebo project.json
+- Upload spouštět ručně (tlačítko "Uložit na Drive") nebo při Save projektu
+
+Příklad integrace:
+  service = get_drive_service()
+  # Uložení projektu na Drive
+  file_id = upload_file(service, "muj_projekt.json", drive_folder_id="...")
+  # Příští session – stažení
+  download_file(service, file_id, "muj_projekt_stazeny.json")
+
+
+EXISTUJÍCÍ IMPLEMENTACE V PROJEKTECH
+--------------------------------------
+- d:\pythonProjects\P4Tools\drive_client.py  – plný OAuth2 klient s upload/download/tree
+- d:\pythonProjects\Drive\analyze_drive.py   – příklad autentizace a práce s metadaty
+- d:\pythonProjects\SteamLib\drive_client.py – stejný klient jako P4Tools (sdílená kopie)
+
+drive_client.py z P4Tools lze zkopírovat přímo do WriterRoom a použít třídu DriveClient.

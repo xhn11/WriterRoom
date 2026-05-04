@@ -1,0 +1,28 @@
+# WriterRoom – závislosti
+# ========================
+# Instalace:
+#   pip install -r requirements.txt
+#
+# Pro XTTS-v2 (audiokniha) je potřeba GPU s CUDA pro rozumný výkon,
+# ale funguje i na CPU (pomalé). Ujistěte se, že máte nainstalovaný
+# odpovídající torch (https://pytorch.org/get-started/locally/).
+
+# Copilot API (viz copilot_navod.txt)
+httpx>=0.27.0
+
+# Google Drive API (viz google_drive_navod.txt)
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.1.0
+
+# XTTS-v2 TTS engine (coqui)
+# Pokud se nezdaří přímá instalace TTS, zkuste: pip install coqui-tts
+TTS>=0.22.0
+
+# PyTorch – nutný pro XTTS-v2
+# CPU varianta (menší stažení):
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# CUDA 12.1 varianta (GPU, rychlejší):
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+torchaudio>=2.0.0

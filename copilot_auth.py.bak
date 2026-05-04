@@ -1,0 +1,183 @@
+"""
+Správce Copilot session tokenů.
+
+GitHub Copilot API nepodporuje PAT – vyžaduje krátkodobý session token
+(platí ~30 minut), který se získá výměnou za GitHub OAuth token.
+Tento modul token automaticky obnovuje.
+"""
+from __future__ import annotations
+
+import os
+import time
+import threading
+import httpx
+
+COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
+COPILOT_API_BASE  = "https://api.githubcopilot.com"
+
+EDITOR_HEADERS = {
+    "Editor-Version": "vscode/1.96.0",
+    "Editor-Plugin-Version": "copilot-chat/0.22.0",
+    "Copilot-Integration-Id": "vscode-chat",
+    "User-Agent": "GitHubCopilotChat/0.22.0",
+}
+
+# Prefixové identifikátory modelarů, které jsou POUZE na GitHub Models Marketplace
+# (ne Copilot API) – všechno ostatní jde přes Copilot API pokud je token dostupný
+GITHUB_MODELS_ONLY_PREFIXES = (
+    "Meta-",
+    "Mistral-",
+    "AI21-",
+)
+
+
+class CopilotTokenManager:
+    """Thread-safe správce Copilot session tokenů s automatickým obnovováním."""
+
+    def __init__(self, oauth_token: str):
+        self._oauth_token = oauth_token
+        self._session_token: str = ""
+        self._expires_at: float = 0.0
+        self._lock = threading.Lock()
+
+    def get_token(self) -> str:
+        with self._lock:
+            # Obnov 2 minuty před vypršením
+            if time.time() >= self._expires_at - 120:
+                self._refresh()
+            return self._session_token
+
+    def _refresh(self) -> None:
+        resp = httpx.get(
+            COPILOT_TOKEN_URL,
+            headers={
+                "Authorization": f"Bearer {self._oauth_token}",
+                **EDITOR_HEADERS,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        token: str = data.get("token", "")
+        expires_at: int = data.get("expires_at", int(time.time()) + 1800)
+        if not token:
+            raise ValueError(f"Nepodařilo se získat Copilot token: {data}")
+        self._session_token = token
+        self._expires_at = float(expires_at)
+
+
+# Singleton – inicializuje se při prvním importu pokud je OAuth token k dispozici
+_manager: CopilotTokenManager | None = None
+
+
+def _read_windows_credential(target: str) -> str:
+    """Přečte heslo/token z Windows Credential Manageru."""
+    try:
+        import ctypes
+        import ctypes.wintypes as wt
+
+        CRED_TYPE_GENERIC = 1
+
+        class _CREDENTIAL(ctypes.Structure):
+            _fields_ = [
+                ("Flags", wt.DWORD), ("Type", wt.DWORD), ("TargetName", wt.LPWSTR),
+                ("Comment", wt.LPWSTR), ("LastWritten", wt.FILETIME),
+                ("CredentialBlobSize", wt.DWORD),
+                ("CredentialBlob", ctypes.POINTER(ctypes.c_byte)),
+                ("Persist", wt.DWORD), ("AttributeCount", wt.DWORD),
+                ("Attributes", ctypes.c_void_p), ("TargetAlias", wt.LPWSTR),
+                ("UserName", wt.LPWSTR),
+            ]
+
+        advapi32 = ctypes.windll.advapi32
+        cred_ptr = ctypes.POINTER(_CREDENTIAL)()
+        if not advapi32.CredReadW(target, CRED_TYPE_GENERIC, 0, ctypes.byref(cred_ptr)):
+            return ""
+        cred = cred_ptr.contents
+        raw = bytes(cred.CredentialBlob[i] for i in range(cred.CredentialBlobSize))
+        advapi32.CredFree(cred_ptr)
+        # VS Code ukládá tokeny jako UTF-16-LE, git jako UTF-8
+        if b"\x00" in raw:
+            return raw.decode("utf-16-le", errors="replace").strip("\x00 ")
+        return raw.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _load_dotenv() -> None:
+    """Načte .env soubor z adresáře projektu nebo domovského adresáře."""
+    for candidate in (
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+        os.path.join(os.path.expanduser("~"), ".writerroom", ".env"),
+    ):
+        try:
+            with open(candidate, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, _, v = line.partition("=")
+                        k = k.strip()
+                        v = v.strip().strip('"').strip("'")
+                        if k and v and k not in os.environ:
+                            os.environ[k] = v
+        except FileNotFoundError:
+            pass
+
+
+def _find_oauth_token() -> str:
+    """Pokusí se najít GitHub OAuth token z různých zdrojů (v pořadí priority)."""
+    _load_dotenv()
+
+    # 1. Explicitní env proměnná
+    token = os.getenv("GITHUB_OAUTH_TOKEN") or os.getenv("GITHUB_TOKEN")
+    if token:
+        return token.strip()
+
+    # 2. Windows Credential Manager – git uloží token po `git clone` / `gh auth login`
+    for target in (
+        "git:https://github.com",
+        "https://github.com/",
+        "GitHub - https://api.github.com/" + os.getenv("USERNAME", ""),
+    ):
+        t = _read_windows_credential(target)
+        if t and len(t) >= 10:
+            return t
+
+    # 3. GitHub CLI: gh auth token
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"], capture_output=True, text=True, timeout=5
+        )
+        t = result.stdout.strip()
+        if t and not t.startswith("error"):
+            return t
+    except Exception:
+        pass
+
+    return ""
+
+
+def get_manager() -> CopilotTokenManager | None:
+    global _manager
+    if _manager is None:
+        oauth = _find_oauth_token()
+        if oauth:
+            _manager = CopilotTokenManager(oauth)
+    return _manager
+
+
+def is_copilot_model(model: str) -> bool:
+    """Vrátí True pokud model má jít přes Copilot API.
+
+    Logika: pokud je Copilot OAuth token nastaven, routujeme přes Copilot API
+    všechno kromě modelů, které jsou exkluzivně na GitHub Models Marketplace
+    (Meta-Llama, Mistral, AI21 apod.).
+    """
+    mgr = get_manager()
+    if mgr is None:
+        return False
+    # GitHub Models Marketplace-only modely jdou přes Azure endpoint
+    if any(model.startswith(p) for p in GITHUB_MODELS_ONLY_PREFIXES):
+        return False
+    return True
