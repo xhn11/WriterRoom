@@ -4,16 +4,25 @@ AI generátor kapitol z kostry scény pomocí Copilot API.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from copilot_api import ask, ask_json, RateLimitError
 
+log = logging.getLogger("generator")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+
 _SYSTEM_CHAPTER = (
-    "Jsi zkušený spisovatel beletrie. Z poskytnuté kostry nebo osnovy scény napiš "
-    "plnohodnotnou literární kapitolu.\n"
-    "Piš dramaticky, poeticky a poutavě. Používej dialog, popis prostředí a vnitřní "
-    "monolog postav. Kapitola musí plynule navazovat na kontext díla.\n"
-    "Výstup musí být POUZE text kapitoly – žádné nadpisy, žádné komentáře, jen příběh."
+    "Jsi zkušený spisovatel beletrie. Tvým JEDINÝM úkolem je rozepsat přiloženou kostru do plnohodnotné literární kapitoly.\n"
+    "PRAVIDLA:\n"
+    "1. Piš VÝHRADNĚ o postavách, místech a událostech, které jsou uvedeny v kostře. Nevymýšlej žádné nové postavy, místa ani události.\n"
+    "2. Zachovej náladu, tempo a záměr kostry – pokud kostra popisuje útěk v uličce, piš o útěku v uličce.\n"
+    "3. Piš dramaticky, poeticky a poutavě. Používej dialog, popis prostředí a vnitřní monolog postav.\n"
+    "4. Výstup musí být POUZE text kapitoly – žádné nadpisy, žádné komentáře, jen příběh."
 )
 
 _SYSTEM_SUMMARY = (
@@ -45,6 +54,7 @@ def generate_chapter(
     header = "\n".join(parts)
     user_msg = f"{header}\n\nKostra kapitoly:\n{skeleton}" if header else f"Kostra kapitoly:\n{skeleton}"
 
+    log.debug("=== PROMPT DO AI ===\n%s\n====================", user_msg)
     return _call(user_msg, _SYSTEM_CHAPTER, temperature, max_tokens)
 
 

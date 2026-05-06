@@ -556,7 +556,7 @@ class WriterRoomApp(tk.Tk):
 
         for ch_data in self._import_result:
             self.project.chapters.append(
-                Chapter(title=ch_data["title"], text=ch_data["text"])
+                Chapter(title=ch_data["title"], skeleton=ch_data["text"], text=ch_data["text"])
             )
 
         self._refresh_ch_list()
@@ -798,7 +798,6 @@ class WriterRoomApp(tk.Tk):
                     skeleton=skeleton,
                     project_title=project.title,
                     genre=project.genre,
-                    style_notes=project.style_notes,
                     previous_summary=prev_summary,
                     temperature=temp,
                     max_tokens=3000,

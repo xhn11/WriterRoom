@@ -36,6 +36,22 @@ BUILTIN_SPEAKERS = [
 ]
 
 
+def _clean_for_tts(text: str) -> str:
+    """Odstraní/nahradí znaky, které XTTS čte divně."""
+    # Uvozovky → nic (XTTS je čte jako hluk / zvláštní zvuk)
+    text = text.replace("„", "").replace(""", "").replace(""", "").replace('"', "")
+    text = text.replace("»", "").replace("«", "").replace("›", "").replace("‹", "")
+    # Pomlčky a trojtečky → čárka (pauza)
+    text = text.replace("–", ",").replace("—", ",").replace("…", ",")
+    # Tečky → čárka (XTTS čte tečky jako zvuk, čárka dělá pauzu bez čtení)
+    text = re.sub(r"\.(?=\s|$)", ",", text)
+    # Více čárek za sebou → jedna
+    text = re.sub(r",\s*,+", ",", text)
+    # Více mezer → jedna
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip()
+
+
 def _split_text(text: str, max_chars: int = _CHUNK_MAX) -> list[str]:
     """Rozdělí text na chunky na hranicích vět, max max_chars znaků."""
     # Zachovat odstavce jako celky (menší)
@@ -135,6 +151,7 @@ class TTSEngine:
         """Syntetizuje text do WAV souboru. Automaticky dělí dlouhé texty."""
         self._load(progress_callback)
 
+        text = _clean_for_tts(text)
         chunks = _split_text(text)
         total = len(chunks)
 
